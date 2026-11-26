@@ -18,6 +18,7 @@ import {
   createFakeTransport,
   type NotificationTransport,
 } from "./notification-transport.server";
+import { DEFAULT_PREFERENCES } from "./notification-types";
 
 type TestDb = ReturnType<typeof createTestDb>;
 
@@ -444,7 +445,11 @@ const THROWING_TRANSPORT: NotificationTransport = {
     throw new Error("vendor is down");
   },
   async syncUser() {},
+  async getPreferences() {
+    return { ...DEFAULT_PREFERENCES };
+  },
   async updatePreferences() {},
+
   async archiveForComment() {},
 };
 
