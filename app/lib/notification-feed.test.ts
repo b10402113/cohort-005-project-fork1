@@ -75,6 +75,7 @@ describe("toNotificationViewModel", () => {
         courseTitle: "Introduction to TypeScript",
         amount: "$79.00",
         reason: "Bought the wrong course.",
+        requester: "Sarah Chen",
         url: "/admin/refunds",
       })
     );

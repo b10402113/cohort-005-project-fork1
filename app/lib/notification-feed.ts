@@ -30,6 +30,7 @@ export type NotificationData =
       courseTitle: string;
       amount: string;
       reason: string;
+      requester?: string;
       url?: string;
     }
   | {

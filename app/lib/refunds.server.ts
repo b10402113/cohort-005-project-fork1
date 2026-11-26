@@ -15,6 +15,7 @@ import {
   videoWatchEvents,
   LessonProgressStatus,
   RefundStatus,
+  UserRole,
 } from "~/db/schema";
 import { formatPrice } from "~/lib/utils";
 import {
@@ -23,6 +24,11 @@ import {
   REFUND_WINDOW_DAYS,
   type RuleBreak,
 } from "~/lib/refund-rules";
+import {
+  getNotificationTransport,
+  guardedTransport,
+  type NotificationTransport,
+} from "~/lib/notification-transport.server";
 
 // ─── Refunds ───
 // Everything about Refund Requests: whether a Purchase may be refunded, raising
@@ -354,12 +360,32 @@ export type RaiseResult =
   | { ok: true; refundRequestId: number; kind: PurchaseKind; email: Email }
   | Failure;
 
+/**
+ * Where a decision Notification sends the buyer: to the course they bought, so
+ * they can see what changed (or, for a decline, what they still have). The
+ * PRD only pins the confirmation as destination-less. See notification-feed.ts.
+ */
+function courseHref(course: { slug: string }): string {
+  return `/courses/${course.slug}`;
+}
+
+/** Resolved at trigger time, never synced as a role: a new Admin sees only new requests. */
+function currentPlatformAdminIds(db: Queryable): number[] {
+  return db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.role, UserRole.Admin))
+    .all()
+    .map((row) => row.id);
+}
+
 export function raiseRefundRequest(
   db: Db,
   purchaseId: number,
   buyerId: number,
   reason: string,
-  now: Date
+  now: Date,
+  transport: NotificationTransport = getNotificationTransport()
 ): RaiseResult {
   const check = checkRefundRequest(db, purchaseId, buyerId, now);
   if (!check.ok) return check;
@@ -386,6 +412,40 @@ export function raiseRefundRequest(
     })
     .returning()
     .get();
+
+  const guarded = guardedTransport(transport);
+  const amount = formatPrice(purchase.amountPaid);
+
+  // After the write commits: a confirmation to the buyer (#8, no destination)
+  // and a new Open Refund Request to every current Platform Admin (#3).
+  void guarded.trigger({
+    type: "refund_confirmation",
+    category: "refund_updates",
+    recipientIds: [buyer.id],
+    actor: null,
+    data: { courseTitle: course.title, amount },
+    idempotencyKey: `refund-confirmation:${refundRequest.id}`,
+  });
+
+  void guarded.trigger({
+    type: "refund_raised",
+    category: "open_refund_requests",
+    recipientIds: currentPlatformAdminIds(db),
+    actor: {
+      id: buyer.id,
+      name: buyer.name,
+      email: buyer.email,
+      avatarUrl: buyer.avatarUrl,
+    },
+    data: {
+      requester: buyer.name,
+      courseTitle: course.title,
+      amount,
+      reason,
+      url: "/admin/refunds",
+    },
+    idempotencyKey: `refund-raised:${refundRequest.id}`,
+  });
 
   return {
     ok: true,
@@ -570,6 +630,54 @@ export function listTeamLicences(db: Queryable, buyerId: number, now: Date) {
 
 export type DecisionResult = { ok: true; email: Email } | Failure;
 
+type DecisionOutcome =
+  | { ok: true; purchase: Purchase; email: Email }
+  | Failure;
+
+/**
+ * Fires the buyer's decision Notification after the decision commits. A Team
+ * Licence's buyer is the Team Admin on the Purchase, so they get the same one a
+ * Student does. The transport is guarded, so a vendor outage never undoes it.
+ */
+function notifyDecision(
+  transport: NotificationTransport,
+  db: Queryable,
+  refundRequestId: number,
+  purchase: Purchase,
+  decision: RefundStatus.Approved | RefundStatus.Declined,
+  note: string | null
+): void {
+  const course = db
+    .select()
+    .from(courses)
+    .where(eq(courses.id, purchase.courseId))
+    .get();
+  if (!course) return;
+
+  const approved = decision === RefundStatus.Approved;
+  const guarded = guardedTransport(transport);
+
+  void guarded.trigger({
+    type: approved ? "refund_approved" : "refund_declined",
+    category: "refund_updates",
+    recipientIds: [purchase.userId],
+    actor: null,
+    data: approved
+      ? {
+          courseTitle: course.title,
+          amount: formatPrice(purchase.amountPaid),
+          decisionNote: note,
+          url: courseHref(course),
+        }
+      : {
+          courseTitle: course.title,
+          decisionNote: note,
+          url: courseHref(course),
+        },
+    idempotencyKey: `${approved ? "refund-approved" : "refund-declined"}:${refundRequestId}`,
+  });
+}
+
 function findOpenRefundRequest(
   tx: Queryable,
   refundRequestId: number
@@ -616,9 +724,10 @@ export function approveRefundRequest(
   refundRequestId: number,
   platformAdminId: number,
   note: string | null,
-  now: Date
+  now: Date,
+  transport: NotificationTransport = getNotificationTransport()
 ): DecisionResult {
-  return db.transaction((tx): DecisionResult => {
+  const outcome = db.transaction((tx): DecisionOutcome => {
     const found = findOpenRefundRequest(tx, refundRequestId);
     if (!found.ok) return found;
 
@@ -679,9 +788,23 @@ export function approveRefundRequest(
 
     return {
       ok: true,
+      purchase,
       email: buildDecisionEmail(tx, purchase, RefundStatus.Approved, note),
     };
   });
+
+  if (!outcome.ok) return outcome;
+
+  notifyDecision(
+    transport,
+    db,
+    refundRequestId,
+    outcome.purchase,
+    RefundStatus.Approved,
+    note
+  );
+
+  return { ok: true, email: outcome.email };
 }
 
 /**
@@ -694,7 +817,8 @@ export function declineRefundRequest(
   refundRequestId: number,
   platformAdminId: number,
   note: string,
-  now: Date
+  now: Date,
+  transport: NotificationTransport = getNotificationTransport()
 ): DecisionResult {
   const trimmedNote = note.trim();
 
@@ -706,7 +830,7 @@ export function declineRefundRequest(
     };
   }
 
-  return db.transaction((tx): DecisionResult => {
+  const outcome = db.transaction((tx): DecisionOutcome => {
     const found = findOpenRefundRequest(tx, refundRequestId);
     if (!found.ok) return found;
 
@@ -722,6 +846,7 @@ export function declineRefundRequest(
 
     return {
       ok: true,
+      purchase: found.purchase,
       email: buildDecisionEmail(
         tx,
         found.purchase,
@@ -730,6 +855,19 @@ export function declineRefundRequest(
       ),
     };
   });
+
+  if (!outcome.ok) return outcome;
+
+  notifyDecision(
+    transport,
+    db,
+    refundRequestId,
+    outcome.purchase,
+    RefundStatus.Declined,
+    trimmedNote
+  );
+
+  return { ok: true, email: outcome.email };
 }
 
 /** The email the buyer gets once their Refund Request is decided. */
