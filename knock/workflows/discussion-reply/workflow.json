@@ -1,0 +1,11 @@
+{
+  "key": "discussion-reply",
+  "name": "Discussion Reply",
+  "categories": ["discussion_replies"],
+  "channel": "in_app_feed",
+  "feedChannelEnv": "KNOCK_FEED_CHANNEL_ID",
+  "template": {
+    "title": "{{ actor.name }} replied to your question",
+    "body": "“{{ data.snippet }}” · {{ data.lessonTitle }}"
+  }
+}

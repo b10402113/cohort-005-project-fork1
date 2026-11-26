@@ -1,0 +1,11 @@
+{
+  "key": "new-enrollment",
+  "name": "New Enrollment",
+  "categories": ["enrollments"],
+  "channel": "in_app_feed",
+  "feedChannelEnv": "KNOCK_FEED_CHANNEL_ID",
+  "template": {
+    "title": "{{ actor.name }} enrolled in {{ data.courseTitle }}",
+    "body": "{{ data.courseTitle }}"
+  }
+}

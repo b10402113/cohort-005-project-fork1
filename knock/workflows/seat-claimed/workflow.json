@@ -1,0 +1,11 @@
+{
+  "key": "seat-claimed",
+  "name": "Seat claimed",
+  "categories": ["seat_claims"],
+  "channel": "in_app_feed",
+  "feedChannelEnv": "KNOCK_FEED_CHANNEL_ID",
+  "template": {
+    "title": "{{ actor.name }} claimed a Seat",
+    "body": "{{ data.courseTitle }} · {{ data.seatsLeft }} Seats left"
+  }
+}

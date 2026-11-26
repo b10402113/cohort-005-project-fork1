@@ -1,0 +1,11 @@
+{
+  "key": "discussion-question",
+  "name": "New Discussion Question",
+  "categories": ["discussion_questions"],
+  "channel": "in_app_feed",
+  "feedChannelEnv": "KNOCK_FEED_CHANNEL_ID",
+  "template": {
+    "title": "{{ actor.name }} asked a question",
+    "body": "“{{ data.snippet }}” · {{ data.lessonTitle }}"
+  }
+}

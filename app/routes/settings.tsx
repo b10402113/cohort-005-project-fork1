@@ -17,6 +17,7 @@ import { db } from "~/db";
 import { eq } from "drizzle-orm";
 import { formatPrice } from "~/lib/utils";
 import { listRefundRequestsForBuyer } from "~/lib/refunds.server";
+import { syncUserNotifications } from "~/lib/notification-users.server";
 
 const settingsSchema = z.object({
   name: z.string().trim().min(1, "Name cannot be empty."),
@@ -94,6 +95,7 @@ export async function action({ request }: Route.ActionArgs) {
     .where(eq(users.id, currentUser.id))
     .returning()
     .get();
+  await syncUserNotifications(db, currentUser.id);
   return { success: true };
 }
 

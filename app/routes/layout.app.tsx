@@ -18,6 +18,11 @@ import {
   TeamMemberRole,
   LessonProgressStatus,
 } from "~/db/schema";
+import {
+  notificationClientConfig,
+  notificationFeedEnabled,
+  signNotificationUserToken,
+} from "~/lib/notification-transport.server";
 
 function getAllUsers() {
   return db.select().from(users).all();
@@ -171,6 +176,21 @@ function getRecentlyProgressedCourses(userId: number, limit: number = 3) {
     .all();
 }
 
+// The feed is only handed a config when the app can actually reach the vendor.
+// Without the secret key it gets null, and the shell shows its empty state.
+async function buildNotificationConfig(userId: number) {
+  if (!notificationFeedEnabled()) return null;
+  const config = notificationClientConfig();
+  const userToken = await signNotificationUserToken(userId);
+  if (!userToken) return null;
+  return {
+    publicApiKey: config.publicApiKey,
+    feedChannelId: config.feedChannelId,
+    userId,
+    userToken,
+  };
+}
+
 export async function loader({ request }: Route.LoaderArgs) {
   const users = getAllUsers();
   const currentUserId = await getCurrentUserId(request);
@@ -208,6 +228,9 @@ export async function loader({ request }: Route.LoaderArgs) {
           avatarUrl: currentUser.avatarUrl ?? null,
         }
       : null,
+    notificationConfig: currentUser
+      ? await buildNotificationConfig(currentUser.id)
+      : null,
     recentCourses,
     devCountry,
     countryTierInfo,
@@ -225,6 +248,7 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
     countryTierInfo,
     countries,
     isTeamAdmin: userIsTeamAdmin,
+    notificationConfig,
   } = loaderData;
 
   return (
@@ -233,6 +257,7 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
         currentUser={currentUser}
         recentCourses={recentCourses}
         isTeamAdmin={userIsTeamAdmin}
+        notificationConfig={notificationConfig}
       />
       <main className="flex-1 overflow-y-auto">
         <Outlet />

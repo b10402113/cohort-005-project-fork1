@@ -14,6 +14,7 @@ import {
   QuestionType,
   TeamMemberRole,
 } from "../app/db/schema";
+import { syncUserNotifications } from "../app/lib/notification-users.server";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -267,6 +268,18 @@ async function seed() {
 
   console.log(
     `Created ${1 + instructorCount + studentCount} users (1 admin, ${instructorCount} instructors, ${studentCount} students).`
+  );
+
+  // ─── Notification sync ───
+  // Put every seeded person into the notification vendor (identity + default
+  // preferences when absent). Without a vendor key this is a logging no-op, so
+  // the seed still succeeds and the feed stays empty.
+  const seededUsers = [admin, instructor1, instructor2, instructor3, ...allStudents];
+  for (const user of seededUsers) {
+    await syncUserNotifications(db, user.id);
+  }
+  console.log(
+    `Synced ${seededUsers.length} users to the notification vendor.`
   );
 
   // ─── Categories ───
