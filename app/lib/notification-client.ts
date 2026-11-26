@@ -1,6 +1,7 @@
 import type KnockClient from "@knocklabs/client";
 import type { Feed, FeedItem, Recipient } from "@knocklabs/client";
 import {
+  pageHasMore,
   toNotificationViewModel,
   type NotificationData,
   type NotificationViewModel,
@@ -10,6 +11,8 @@ import {
 // The only module the feed components call. It knows Knock; the components only
 // see Cadence view models. The vendor SDK is imported lazily so server
 // rendering never loads it. See docs/research/knock-in-app-feed.md.
+
+const PAGE_SIZE = 50;
 
 export type NotificationPage = {
   items: NotificationViewModel[];
@@ -22,6 +25,12 @@ export type NotificationCounts = {
   unread: number;
 };
 
+/** What changed in the feed, delivered to the component from the socket. */
+export type NotificationChange = {
+  items: NotificationViewModel[];
+  counts: NotificationCounts;
+};
+
 export interface NotificationClient {
   list(cursor?: string): Promise<NotificationPage>;
   counts(): Promise<NotificationCounts>;
@@ -31,7 +40,9 @@ export interface NotificationClient {
   /** Bulk, by channel: covers Notifications not yet loaded. */
   markAllRead(): Promise<void>;
   /** Registers a change listener; returns the teardown fn. */
-  subscribe(onChange: () => void): () => void;
+  subscribe(onChange: (change: NotificationChange) => void): () => void;
+  /** Drops the feed and closes its connection. Safe to call more than once. */
+  dispose(): void;
 }
 
 export type NotificationClientConfig = {
@@ -41,16 +52,29 @@ export type NotificationClientConfig = {
   userToken: string;
 };
 
+// Every store mutation the socket (or our own status changes) can emit. Each
+// one hands the component a fresh snapshot, so the list and badge stay in step.
 const CHANGE_EVENTS = [
-  "items.received.*",
+  "items.received.realtime",
+  "items.received.page",
   "items.all_seen",
   "items.all_read",
   "items.seen",
   "items.read",
+  "items.unread",
+  "items.unseen",
+  "items.archived",
+  "items.unarchived",
+  "items.all_archived",
 ] as const;
 
-function toData(item: FeedItem): NotificationData {
-  return item.data as unknown as NotificationData;
+function isNotificationData(value: unknown): value is NotificationData {
+  return typeof value === "object" && value !== null && "kind" in value;
+}
+
+function toData(item: FeedItem): NotificationData | null {
+  const data = item.data as unknown;
+  return isNotificationData(data) ? data : null;
 }
 
 function actorFrom(recipient: Recipient | undefined) {
@@ -61,19 +85,33 @@ function actorFrom(recipient: Recipient | undefined) {
   };
 }
 
+function toViewModel(item: FeedItem): NotificationViewModel | null {
+  const data = toData(item);
+  if (!data) return null;
+  return toNotificationViewModel({
+    id: item.id,
+    insertedAt: item.inserted_at,
+    read: item.read_at !== null,
+    actor: actorFrom(item.actors[0]),
+    data,
+  });
+}
+
+function toViewModels(items: FeedItem[]): NotificationViewModel[] {
+  const views: NotificationViewModel[] = [];
+  for (const item of items) {
+    const view = toViewModel(item);
+    if (view) views.push(view);
+  }
+  return views;
+}
+
 function toPage(items: FeedItem[], after: string | null): NotificationPage {
   return {
-    items: items.map((item) =>
-      toNotificationViewModel({
-        id: item.id,
-        insertedAt: item.inserted_at,
-        read: item.read_at !== null,
-        actor: actorFrom(item.actors[0]),
-        data: toData(item),
-      })
-    ),
+    items: toViewModels(items),
     cursor: after,
-    hasMore: after !== null,
+    // A short page ends history even if the vendor still reports a cursor.
+    hasMore: pageHasMore(after, items.length, PAGE_SIZE),
   };
 }
 
@@ -92,12 +130,35 @@ export async function createNotificationClient(
   const knock: KnockClient = new Knock(config.publicApiKey);
   knock.authenticate({ id: String(config.userId) }, config.userToken);
   const feed: Feed = knock.feeds.initialize(config.feedChannelId, {
-    page_size: 50,
+    page_size: PAGE_SIZE,
   });
+
+  // One socket connection for this person; the store keeps it fresh.
   feed.listenForUpdates();
 
   function findItem(id: string): FeedItem | undefined {
     return feed.getState().items.find((item) => item.id === id);
+  }
+
+  function snapshot(): NotificationChange {
+    const { items, metadata } = feed.getState();
+    return {
+      items: toViewModels(items),
+      counts: {
+        unseen: metadata.unseen_count,
+        unread: metadata.unread_count,
+      },
+    };
+  }
+
+  let disposed = false;
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    // Dispose unbinds the broadcaster and removes the feed; logout drops the
+    // socket and HTTP client so switching users leaves nothing open.
+    feed.dispose();
+    knock.logout();
   }
 
   return {
@@ -133,15 +194,18 @@ export async function createNotificationClient(
     },
 
     subscribe(onChange) {
+      const handler = () => onChange(snapshot());
       for (const event of CHANGE_EVENTS) {
-        feed.on(event, onChange);
+        feed.on(event, handler);
       }
       return () => {
         for (const event of CHANGE_EVENTS) {
-          feed.off(event, onChange);
+          feed.off(event, handler);
         }
-        feed.dispose();
+        dispose();
       };
     },
+
+    dispose,
   };
 }

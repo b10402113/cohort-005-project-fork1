@@ -163,6 +163,38 @@ function copyFor(data: NotificationData, actorName: string): Copy {
 }
 
 /**
+ * Whether another page is reachable. A null cursor is the vendor saying history
+ * is exhausted; a short page means the same even if it hands back a cursor.
+ */
+export function pageHasMore(
+  cursor: string | null,
+  itemCount: number,
+  pageSize: number
+): boolean {
+  return cursor !== null && itemCount >= pageSize;
+}
+
+/**
+ * Merges newly arrived Notifications into the list already on screen. Newest
+ * first, and duplicates collapse by id with the incoming copy winning, because
+ * a live arrival and the page fetched for it can describe the same entry with
+ * fresher read/seen state. See GLOSSARY.md.
+ */
+export function mergeFeedItems(
+  existing: NotificationViewModel[],
+  incoming: NotificationViewModel[]
+): NotificationViewModel[] {
+  const byId = new Map<string, NotificationViewModel>();
+  for (const item of existing) byId.set(item.id, item);
+  for (const item of incoming) byId.set(item.id, item);
+
+  return [...byId.values()].sort((a, b) => {
+    const byNewest = b.createdAt.localeCompare(a.createdAt);
+    return byNewest !== 0 ? byNewest : b.id.localeCompare(a.id);
+  });
+}
+
+/**
  * Builds the Cadence Notification a person reads from one feed entry. The text
  * is always Cadence's, never the vendor's template.
  */

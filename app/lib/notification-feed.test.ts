@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  mergeFeedItems,
+  pageHasMore,
   toNotificationViewModel,
   type NotificationData,
   type NotificationEntry,
+  type NotificationViewModel,
 } from "./notification-feed";
 
 const INSERTED_AT = "2026-11-20T09:30:00.000Z";
@@ -192,5 +195,100 @@ describe("toNotificationViewModel", () => {
     expect(view.actorName).toBeNull();
     expect(view.isSystem).toBe(false);
     expect(view.avatarUrl).toBeNull();
+  });
+});
+
+function view(
+  id: string,
+  createdAt: string,
+  overrides: Partial<NotificationViewModel> = {}
+): NotificationViewModel {
+  return {
+    id,
+    category: "discussion_replies",
+    title: "Someone replied to your question",
+    snippet: null,
+    createdAt,
+    read: false,
+    avatarUrl: null,
+    actorName: "Someone",
+    isSystem: false,
+    ...overrides,
+  };
+}
+
+describe("mergeFeedItems", () => {
+  it("puts a live arrival at the top of an existing newest-first list", () => {
+    const existing = [
+      view("b", "2026-11-20T09:30:00.000Z"),
+      view("a", "2026-11-20T09:00:00.000Z"),
+    ];
+    const arrival = view("c", "2026-11-20T10:00:00.000Z");
+
+    expect(mergeFeedItems(existing, [arrival]).map((item) => item.id)).toEqual([
+      "c",
+      "b",
+      "a",
+    ]);
+  });
+
+  it("keeps order when a live arrival is older than rows already on screen", () => {
+    const existing = [
+      view("c", "2026-11-20T10:00:00.000Z"),
+      view("a", "2026-11-20T09:00:00.000Z"),
+    ];
+    const arrival = view("b", "2026-11-20T09:30:00.000Z");
+
+    expect(mergeFeedItems(existing, [arrival]).map((item) => item.id)).toEqual([
+      "c",
+      "b",
+      "a",
+    ]);
+  });
+
+  it("collapses a duplicate id to one row, keeping the fresher copy", () => {
+    const existing = [view("a", "2026-11-20T09:00:00.000Z", { read: false })];
+    const fresh = view("a", "2026-11-20T09:00:00.000Z", { read: true });
+
+    const merged = mergeFeedItems(existing, [fresh]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0].id).toBe("a");
+    expect(merged[0].read).toBe(true);
+  });
+
+  it("appends an older page below the loaded rows without duplicates", () => {
+    const existing = [
+      view("c", "2026-11-20T10:00:00.000Z"),
+      view("b", "2026-11-20T09:30:00.000Z"),
+    ];
+    const olderPage = [
+      view("a", "2026-11-20T09:00:00.000Z"),
+      view("b", "2026-11-20T09:30:00.000Z"),
+    ];
+
+    expect(mergeFeedItems(existing, olderPage).map((item) => item.id)).toEqual([
+      "c",
+      "b",
+      "a",
+    ]);
+  });
+});
+
+describe("pageHasMore", () => {
+  it("stops when the vendor cursor is exhausted", () => {
+    expect(pageHasMore(null, 50, 50)).toBe(false);
+  });
+
+  it("stops on a short final page even if a cursor is returned", () => {
+    expect(pageHasMore("cursor", 12, 50)).toBe(false);
+  });
+
+  it("continues on a full page with a cursor", () => {
+    expect(pageHasMore("cursor", 50, 50)).toBe(true);
+  });
+
+  it("stops when a page is empty", () => {
+    expect(pageHasMore("cursor", 0, 50)).toBe(false);
   });
 });
