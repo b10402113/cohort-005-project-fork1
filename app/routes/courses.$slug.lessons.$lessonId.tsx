@@ -815,7 +815,7 @@ export async function action({ params, request }: Route.ActionArgs) {
       if (!parsed.success) {
         return { ok: false, error: "Enter a comment before posting." };
       }
-      const result = createComment(
+      const result = await createComment(
         db,
         currentUserId,
         lessonId,
@@ -855,7 +855,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     if (!existing || existing.lessonId !== lessonId) {
       throw data("Comment not found", { status: 404 });
     }
-    const result = deleteComment(
+    const result = await deleteComment(
       db,
       parsed.data.commentId,
       currentUserId,

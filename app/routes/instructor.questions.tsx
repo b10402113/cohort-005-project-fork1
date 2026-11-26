@@ -171,7 +171,7 @@ export async function action({ request }: Route.ActionArgs) {
     throw data("Select a user from the DevUI panel.", { status: 401 });
   }
 
-  const result = createComment(
+  const result = await createComment(
     db,
     access.userId,
     question.lessonId,

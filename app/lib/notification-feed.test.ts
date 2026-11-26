@@ -45,6 +45,7 @@ describe("toNotificationViewModel", () => {
       createdAt: INSERTED_AT,
       read: false,
       avatarUrl: ACTOR.avatarUrl,
+      actorName: ACTOR.name,
       isSystem: false,
       href: "/courses/introduction-to-typescript",
     });
@@ -169,6 +170,7 @@ describe("toNotificationViewModel", () => {
       "A Platform Admin will review it. $79.00 for Introduction to TypeScript"
     );
     expect(view.avatarUrl).toBeNull();
+    expect(view.actorName).toBeNull();
     expect(view.isSystem).toBe(true);
     expect(view.href).toBeUndefined();
   });
@@ -186,6 +188,7 @@ describe("toNotificationViewModel", () => {
     );
 
     expect(view.title).toBe("Someone asked a question");
+    expect(view.actorName).toBeNull();
     expect(view.isSystem).toBe(false);
     expect(view.avatarUrl).toBeNull();
   });

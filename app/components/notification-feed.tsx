@@ -60,7 +60,7 @@ function NotificationRow({
           <CadenceAvatar />
         ) : (
           <UserAvatar
-            name={item.title}
+            name={item.actorName ?? "Someone"}
             avatarUrl={item.avatarUrl}
             className={cn("size-9", item.read && "opacity-60")}
           />
