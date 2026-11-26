@@ -97,13 +97,14 @@ describe("toNotificationViewModel", () => {
         kind: "seat_claimed",
         courseTitle: "Introduction to TypeScript",
         seatsLeft: 3,
+        url: "/team",
       })
     );
 
     expect(view.category).toBe("seat_claims");
     expect(view.title).toBe("Sarah Chen claimed a Seat");
     expect(view.snippet).toBe("Introduction to TypeScript · 3 Seats left");
-    expect(view.href).toBeUndefined();
+    expect(view.href).toBe("/team");
   });
 
   it("renders a new Enrollment for the Instructor", () => {
@@ -111,6 +112,7 @@ describe("toNotificationViewModel", () => {
       entry({
         kind: "new_enrollment",
         courseTitle: "Introduction to TypeScript",
+        url: "/instructor/12/students",
       })
     );
 
@@ -119,6 +121,7 @@ describe("toNotificationViewModel", () => {
       "Sarah Chen enrolled in Introduction to TypeScript"
     );
     expect(view.snippet).toBeNull();
+    expect(view.href).toBe("/instructor/12/students");
   });
 
   it("renders a new Discussion Question with the lesson and snippet", () => {

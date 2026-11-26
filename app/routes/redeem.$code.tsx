@@ -127,7 +127,7 @@ export async function action({ params, request }: Route.ActionArgs) {
   }
 
   const userCountry = await resolveCountry(request);
-  const result = claimSeat(
+  const result = await claimSeat(
     db,
     code,
     currentUserId,
