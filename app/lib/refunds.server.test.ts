@@ -14,6 +14,11 @@ import {
   listTeamLicences,
   raiseRefundRequest,
 } from "./refunds.server";
+import {
+  createFakeTransport,
+  type NotificationTransport,
+} from "./notification-transport.server";
+import { DEFAULT_PREFERENCES } from "./notification-types";
 
 type TestDb = ReturnType<typeof createTestDb>;
 
@@ -407,6 +412,229 @@ describe("declining a Refund Request", () => {
     declineRefundRequest(db, id, platformAdmin.id, "Seats are in use.", NOW);
 
     expect(getSeatAvailability(db, getSeat(seats[0].id))).toBe("available");
+  });
+});
+
+function raiseWith(
+  transport: NotificationTransport,
+  purchaseId: number,
+  buyerId: number,
+  now = NOW
+) {
+  const result = raiseRefundRequest(
+    db,
+    purchaseId,
+    buyerId,
+    "It was not what I expected.",
+    now,
+    transport
+  );
+  if (!result.ok) throw new Error(result.error);
+  return result.refundRequestId;
+}
+
+function triggeredOfType(
+  fake: ReturnType<typeof createFakeTransport>,
+  type: string
+) {
+  return fake.calls.triggered.filter((event) => event.type === type);
+}
+
+const THROWING_TRANSPORT: NotificationTransport = {
+  async trigger() {
+    throw new Error("vendor is down");
+  },
+  async syncUser() {},
+  async getPreferences() {
+    return { ...DEFAULT_PREFERENCES };
+  },
+  async updatePreferences() {},
+
+  async archiveForComment() {},
+};
+
+describe("Refund Request notifications", () => {
+  it("confirms the raise to the buyer with course, amount and no destination", () => {
+    const fake = createFakeTransport();
+    const purchase = buyForSelf(base.user.id);
+
+    const id = raiseWith(fake, purchase.id, base.user.id);
+
+    const [confirmation] = triggeredOfType(fake, "refund_confirmation");
+    expect(confirmation).toMatchObject({
+      category: "refund_updates",
+      recipientIds: [base.user.id],
+      actor: null,
+      data: {
+        courseTitle: "Test Course",
+        amount: "$79.00",
+      },
+      idempotencyKey: `refund-confirmation:${id}`,
+    });
+    expect(confirmation.data.url).toBeUndefined();
+  });
+
+  it("tells every current Platform Admin about the raise and not a non-admin", () => {
+    const fake = createFakeTransport();
+    const purchase = buyForSelf(base.user.id);
+    const learner = addLearner("Ben");
+
+    const id = raiseWith(fake, purchase.id, base.user.id);
+
+    const [raised] = triggeredOfType(fake, "refund_raised");
+    expect(raised).toMatchObject({
+      category: "open_refund_requests",
+      recipientIds: [platformAdmin.id],
+      actor: { id: base.user.id, name: "Test User" },
+      data: {
+        requester: "Test User",
+        courseTitle: "Test Course",
+        amount: "$79.00",
+        reason: "It was not what I expected.",
+        url: "/admin/refunds",
+      },
+      idempotencyKey: `refund-raised:${id}`,
+    });
+    expect(raised.recipientIds).not.toContain(learner.id);
+  });
+
+  it("only tells a Platform Admin promoted after an older request about new ones", () => {
+    const before = createFakeTransport();
+    const older = buyForSelf(base.user.id);
+    raiseWith(before, older.id, base.user.id);
+
+    const promoted = db
+      .insert(schema.users)
+      .values({
+        name: "Sam Newadmin",
+        email: "sam@example.com",
+        role: UserRole.Admin,
+      })
+      .returning()
+      .get();
+
+    const after = createFakeTransport();
+    const newer = buyForSelf(addLearner("Ben").id);
+    raiseWith(after, newer.id, newer.userId);
+
+    const [olderRaised] = triggeredOfType(before, "refund_raised");
+    const [newerRaised] = triggeredOfType(after, "refund_raised");
+    expect(olderRaised.recipientIds).not.toContain(promoted.id);
+    expect(newerRaised.recipientIds).toEqual(
+      expect.arrayContaining([platformAdmin.id, promoted.id])
+    );
+  });
+
+  it("tells the buyer their request was approved with the note and a course destination", () => {
+    const fake = createFakeTransport();
+    const purchase = buyForSelf(base.user.id);
+    const id = raiseWith(fake, purchase.id, base.user.id);
+
+    approveRefundRequest(
+      db,
+      id,
+      platformAdmin.id,
+      "Sorry it wasn't for you.",
+      NOW,
+      fake
+    );
+
+    const [approved] = triggeredOfType(fake, "refund_approved");
+    expect(approved).toMatchObject({
+      category: "refund_updates",
+      recipientIds: [base.user.id],
+      data: {
+        courseTitle: "Test Course",
+        amount: "$79.00",
+        decisionNote: "Sorry it wasn't for you.",
+        url: "/courses/test-course",
+      },
+      idempotencyKey: `refund-approved:${id}`,
+    });
+  });
+
+  it("allows an approval without a note", () => {
+    const fake = createFakeTransport();
+    const purchase = buyForSelf(base.user.id);
+    const id = raiseWith(fake, purchase.id, base.user.id);
+
+    approveRefundRequest(db, id, platformAdmin.id, null, NOW, fake);
+
+    const [approved] = triggeredOfType(fake, "refund_approved");
+    expect(approved.data.decisionNote).toBeNull();
+  });
+
+  it("tells the buyer their request was declined with the note", () => {
+    const fake = createFakeTransport();
+    const purchase = buyForSelf(base.user.id);
+    const id = raiseWith(fake, purchase.id, base.user.id);
+
+    declineRefundRequest(
+      db,
+      id,
+      platformAdmin.id,
+      "You finished the course.",
+      NOW,
+      fake
+    );
+
+    const [declined] = triggeredOfType(fake, "refund_declined");
+    expect(declined).toMatchObject({
+      category: "refund_updates",
+      recipientIds: [base.user.id],
+      data: {
+        courseTitle: "Test Course",
+        decisionNote: "You finished the course.",
+        url: "/courses/test-course",
+      },
+      idempotencyKey: `refund-declined:${id}`,
+    });
+  });
+
+  it("gives a Team Licence's Team Admin buyer the same decision Notification", () => {
+    const fake = createFakeTransport();
+    const priya = addLearner("Priya");
+    const { purchase } = buySeats(priya.id, 2);
+    const id = raiseWith(fake, purchase.id, priya.id);
+
+    approveRefundRequest(db, id, platformAdmin.id, "No hard feelings.", NOW, fake);
+
+    const [approved] = triggeredOfType(fake, "refund_approved");
+    expect(approved).toMatchObject({
+      category: "refund_updates",
+      recipientIds: [priya.id],
+      data: { courseTitle: "Test Course", amount: "$158.00" },
+      idempotencyKey: `refund-approved:${id}`,
+    });
+  });
+
+  it("still raises the Refund Request when the transport throws", () => {
+    const purchase = buyForSelf(base.user.id);
+
+    const id = raiseWith(THROWING_TRANSPORT, purchase.id, base.user.id);
+
+    expect(
+      db.select().from(schema.refunds).where(eq(schema.refunds.id, id)).get()
+    ).toMatchObject({ status: RefundStatus.Open });
+  });
+
+  it("still decides the Refund Request when the transport throws", () => {
+    const purchase = buyForSelf(base.user.id);
+    const id = raise(purchase.id, base.user.id);
+
+    const result = approveRefundRequest(
+      db,
+      id,
+      platformAdmin.id,
+      null,
+      NOW,
+      THROWING_TRANSPORT
+    );
+
+    expect(result.ok).toBe(true);
+    expect(
+      db.select().from(schema.refunds).where(eq(schema.refunds.id, id)).get()
+    ).toMatchObject({ status: RefundStatus.Approved });
   });
 });
 

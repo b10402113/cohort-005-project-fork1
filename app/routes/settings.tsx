@@ -17,10 +17,29 @@ import { db } from "~/db";
 import { eq } from "drizzle-orm";
 import { formatPrice } from "~/lib/utils";
 import { listRefundRequestsForBuyer } from "~/lib/refunds.server";
+import { syncUserNotifications } from "~/lib/notification-users.server";
+import {
+  loadNotificationPreferences,
+  saveNotificationPreference,
+} from "~/lib/notification-preferences.server";
+import { NOTIFICATION_CATEGORIES } from "~/lib/notification-types";
+import type { NotificationCategory } from "~/lib/notification-types";
+import { NotificationPreferencesCard } from "~/components/notification-preferences-card";
 
 const settingsSchema = z.object({
   name: z.string().trim().min(1, "Name cannot be empty."),
   bio: z.string().trim().optional(),
+});
+
+const notificationPreferenceSchema = z.object({
+  intent: z.literal("save-notification-preference"),
+  category: z.enum(
+    NOTIFICATION_CATEGORIES as [
+      NotificationCategory,
+      ...NotificationCategory[],
+    ]
+  ),
+  enabled: z.enum(["true", "false"]),
 });
 
 export function meta() {
@@ -50,6 +69,10 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   const refundRequests = listRefundRequestsForBuyer(db, currentUserId);
+  const notificationPreferences = await loadNotificationPreferences(
+    db,
+    currentUserId
+  );
 
   return {
     user: {
@@ -60,6 +83,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       role: currentUser.role,
     },
     refundRequests,
+    notificationPreferences,
   };
 }
 
@@ -80,6 +104,29 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   const formData = await request.formData();
+
+  const intent = formData.get("intent");
+  if (intent === "save-notification-preference") {
+    const parsed = parseFormData(formData, notificationPreferenceSchema);
+    if (!parsed.success) {
+      return { ok: false, error: "That preference could not be saved." };
+    }
+
+    try {
+      await saveNotificationPreference(
+        currentUser.id,
+        parsed.data.category,
+        parsed.data.enabled === "true"
+      );
+    } catch {
+      return {
+        ok: false,
+        error: "Could not save your notification preference.",
+      };
+    }
+    return { ok: true };
+  }
+
   const parsed = parseFormData(formData, settingsSchema);
 
   if (!parsed.success) {
@@ -94,11 +141,12 @@ export async function action({ request }: Route.ActionArgs) {
     .where(eq(users.id, currentUser.id))
     .returning()
     .get();
+  await syncUserNotifications(db, currentUser.id);
   return { success: true };
 }
 
 export default function Settings({ loaderData }: Route.ComponentProps) {
-  const { user, refundRequests } = loaderData;
+  const { user, refundRequests, notificationPreferences } = loaderData;
   const openCount = refundRequests.filter(
     (refundRequest) => refundRequest.status === RefundStatus.Open
   ).length;
@@ -187,6 +235,8 @@ export default function Settings({ loaderData }: Route.ComponentProps) {
           </fetcher.Form>
         </CardContent>
       </Card>
+
+      <NotificationPreferencesCard rows={notificationPreferences} />
 
       {refundRequests.length > 0 && (
         <Card className="mt-8 max-w-md">

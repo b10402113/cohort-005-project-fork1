@@ -1,0 +1,11 @@
+{
+  "key": "refund-raised",
+  "name": "New Open Refund Request",
+  "categories": ["open_refund_requests"],
+  "channel": "in_app_feed",
+  "feedChannelEnv": "KNOCK_FEED_CHANNEL_ID",
+  "template": {
+    "title": "{{ actor.name }} requested a {{ data.amount }} refund",
+    "body": "“{{ data.reason }}” · {{ data.courseTitle }}"
+  }
+}

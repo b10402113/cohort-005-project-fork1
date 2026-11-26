@@ -1,0 +1,11 @@
+{
+  "key": "refund-approved",
+  "name": "Refund Request approved",
+  "categories": ["refund_updates"],
+  "channel": "in_app_feed",
+  "feedChannelEnv": "KNOCK_FEED_CHANNEL_ID",
+  "template": {
+    "title": "Your Refund Request was approved",
+    "body": "{{ data.amount }} for {{ data.courseTitle }}{% if data.decisionNote %} — “{{ data.decisionNote }}”{% endif %}"
+  }
+}
