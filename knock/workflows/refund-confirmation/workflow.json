@@ -1,0 +1,11 @@
+{
+  "key": "refund-confirmation",
+  "name": "Refund Request confirmation",
+  "categories": ["refund_updates"],
+  "channel": "in_app_feed",
+  "feedChannelEnv": "KNOCK_FEED_CHANNEL_ID",
+  "template": {
+    "title": "We've received your Refund Request",
+    "body": "A Platform Admin will review it. {{ data.amount }} for {{ data.courseTitle }}"
+  }
+}

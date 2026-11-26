@@ -1,0 +1,11 @@
+{
+  "key": "refund-declined",
+  "name": "Refund Request declined",
+  "categories": ["refund_updates"],
+  "channel": "in_app_feed",
+  "feedChannelEnv": "KNOCK_FEED_CHANNEL_ID",
+  "template": {
+    "title": "Your Refund Request was declined",
+    "body": "“{{ data.decisionNote }}” — you can ask again."
+  }
+}

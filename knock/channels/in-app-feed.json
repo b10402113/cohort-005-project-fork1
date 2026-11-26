@@ -1,0 +1,5 @@
+{
+  "name": "Cadence feed",
+  "channelType": "in_app_feed",
+  "idEnv": "KNOCK_FEED_CHANNEL_ID"
+}
