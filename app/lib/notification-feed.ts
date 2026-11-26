@@ -79,6 +79,7 @@ export type NotificationViewModel = {
   createdAt: string;
   read: boolean;
   avatarUrl: string | null;
+  actorName: string | null;
   isSystem: boolean;
   href?: string;
 };
@@ -180,6 +181,7 @@ export function toNotificationViewModel(
     createdAt: entry.insertedAt,
     read: entry.read,
     avatarUrl: entry.actor?.avatarUrl ?? null,
+    actorName: isSystem ? null : (entry.actor?.name ?? null),
     isSystem,
     ...(href ? { href } : {}),
   };
