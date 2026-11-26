@@ -11,7 +11,10 @@ import {
 } from "lucide-react";
 import { cn, formatRelativeTime } from "~/lib/utils";
 import { UserAvatar } from "~/components/user-avatar";
-import type { NotificationViewModel } from "~/lib/notification-feed";
+import {
+  mergeFeedItems,
+  type NotificationViewModel,
+} from "~/lib/notification-feed";
 import type { NotificationCategory } from "~/lib/notification-types";
 import {
   createNotificationClient,
@@ -135,18 +138,29 @@ export function NotificationFeed({
       return;
     }
 
+    // Clear the previous person's rows before this client loads.
+    setClient(undefined);
+    setItems([]);
+    setCounts(EMPTY_COUNTS);
+    setCursor(null);
+    setHasMore(false);
+
     let teardown: (() => void) | undefined;
     createNotificationClient(config).then((created) => {
       if (!active) {
+        // Resolved after this effect was torn down: drop the new connection.
+        created?.dispose();
         return;
       }
       setClient(created);
       if (!created) return;
 
-      teardown = created.subscribe(() => {
-        created.counts().then((next) => {
-          if (active) setCounts(next);
-        });
+      // The socket hands us the store's full loaded list and counts on every
+      // change, so the badge and an open popover both update without a poll.
+      teardown = created.subscribe((change) => {
+        if (!active) return;
+        setItems((existing) => mergeFeedItems(existing, change.items));
+        setCounts(change.counts);
       });
     });
 
@@ -167,7 +181,8 @@ export function NotificationFeed({
     let active = true;
     client.list().then(async (page) => {
       if (!active) return;
-      setItems(page.items);
+      // Merge, not replace: a live arrival may already have landed.
+      setItems((existing) => mergeFeedItems(existing, page.items));
       setCursor(page.cursor);
       setHasMore(page.hasMore);
       const next = await client.counts();
@@ -188,13 +203,8 @@ export function NotificationFeed({
       client
         .list(cursor ?? undefined)
         .then((page) => {
-          setItems((existing) => {
-            const seen = new Set(existing.map((item) => item.id));
-            return [
-              ...existing,
-              ...page.items.filter((item) => !seen.has(item.id)),
-            ];
-          });
+          // Merge, not append: a live arrival can duplicate a row on this page.
+          setItems((existing) => mergeFeedItems(existing, page.items));
           setCursor(page.cursor);
           setHasMore(page.hasMore);
         })
@@ -204,18 +214,22 @@ export function NotificationFeed({
     return () => observer.disconnect();
   }, [client, cursor, hasMore, loadingMore, open]);
 
+  // While open, everything seen or arriving is marked seen in bulk, so the
+  // badge clears without touching unread. Never-loaded items are covered by
+  // the vendor's by-channel call, so the badge clears even for them.
+  useEffect(() => {
+    if (!open || !client || counts.unseen === 0) return;
+    client.markSeen();
+  }, [open, client, counts.unseen]);
+
   function toggle() {
-    const next = !open;
-    setOpen(next);
-    if (next && client) {
-      client
-        .markSeen()
-        .then(() => setCounts((current) => ({ ...current, unseen: 0 })));
-    }
+    setOpen((current) => !current);
   }
 
   function readOne(id: string) {
     if (!client) return;
+    const target = items.find((item) => item.id === id);
+    if (!target || target.read) return;
     setItems((existing) =>
       existing.map((item) => (item.id === id ? { ...item, read: true } : item))
     );
