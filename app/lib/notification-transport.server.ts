@@ -65,6 +65,10 @@ export type PreferenceChanges = Partial<Record<NotificationCategory, boolean>>;
 export interface NotificationTransport {
   trigger(event: NotificationEvent): Promise<void>;
   syncUser(user: SyncableUser): Promise<void>;
+  /** The person's full preference set, with defaults filling any gap. */
+  getPreferences(
+    userId: number
+  ): Promise<Record<NotificationCategory, boolean>>;
   updatePreferences(userId: number, changes: PreferenceChanges): Promise<void>;
   archiveForComment(commentId: number): Promise<void>;
 }
@@ -110,6 +114,24 @@ function categoryPatch(
     if (value !== undefined) patch[category] = value;
   }
   return patch;
+}
+
+/**
+ * Fills the person's stored categories over the defaults, so a category they
+ * never wrote still reads its default. Ignores any non-boolean values the
+ * vendor holds (Knock nests per-channel objects).
+ */
+function preferencesWithDefaults(
+  categories: Record<string, boolean | object> | null | undefined
+): Record<NotificationCategory, boolean> {
+  const preferences: Record<NotificationCategory, boolean> = {
+    ...DEFAULT_PREFERENCES,
+  };
+  for (const category of NOTIFICATION_CATEGORIES) {
+    const value = categories?.[category];
+    if (typeof value === "boolean") preferences[category] = value;
+  }
+  return preferences;
 }
 
 // ─── Knock adapter ───
@@ -214,6 +236,14 @@ export function knockTransport(
       );
     },
 
+    async getPreferences(userId) {
+      const existing = await client.users.getPreferences(
+        knockUserId(userId),
+        PREFERENCE_SET_ID
+      );
+      return preferencesWithDefaults(existing.categories);
+    },
+
     async updatePreferences(userId, changes) {
       const existing = await client.users.getPreferences(
         knockUserId(userId),
@@ -281,6 +311,9 @@ export function guardedTransport(
     syncUser(user) {
       return guard(`sync user ${user.id}`, () => inner.syncUser(user));
     },
+    getPreferences(userId) {
+      return inner.getPreferences(userId);
+    },
     updatePreferences(userId, changes) {
       return guard(`update preferences for user ${userId}`, () =>
         inner.updatePreferences(userId, changes)
@@ -307,6 +340,9 @@ export function noopTransport(log: Log = logToConsole): NotificationTransport {
     async syncUser(user) {
       log(`[notifications] no-op sync user ${user.id}`);
     },
+    async getPreferences() {
+      return { ...DEFAULT_PREFERENCES };
+    },
     async updatePreferences(userId) {
       log(`[notifications] no-op update preferences for user ${userId}`);
     },
@@ -332,14 +368,22 @@ export type FakeTransport = NotificationTransport & {
   };
 };
 
-/** Records every call, so services and routes can assert what Cadence sent. */
-export function createFakeTransport(): FakeTransport {
+/**
+ * Records every call, so services and routes can assert what Cadence sent.
+ * Keeps a per-user preference store so a read after a write sees the merge.
+ * `seed` is the starting category set every user begins with.
+ */
+export function createFakeTransport(
+  seed: PreferenceChanges = {}
+): FakeTransport {
   const calls: FakeTransport["calls"] = {
     triggered: [],
     synced: [],
     preferences: [],
     archived: [],
   };
+
+  const stored = new Map<number, PreferenceChanges>();
 
   return {
     calls,
@@ -349,11 +393,51 @@ export function createFakeTransport(): FakeTransport {
     async syncUser(user) {
       calls.synced.push(user);
     },
+    async getPreferences(userId) {
+      return {
+        ...DEFAULT_PREFERENCES,
+        ...seed,
+        ...(stored.get(userId) ?? {}),
+      };
+    },
     async updatePreferences(userId, changes) {
       calls.preferences.push({ userId, changes });
+      stored.set(userId, { ...(stored.get(userId) ?? {}), ...changes });
     },
     async archiveForComment(commentId) {
       calls.archived.push(commentId);
+    },
+  };
+}
+
+/**
+ * Wraps a transport for the preference read, falling back to the defaults when
+ * the vendor can't be reached. Lets the settings card render sensibly without
+ * a vendor key.
+ */
+export function readableTransport(
+  inner: NotificationTransport,
+  fallback: Record<NotificationCategory, boolean> = DEFAULT_PREFERENCES
+): NotificationTransport {
+  return {
+    trigger(event) {
+      return inner.trigger(event);
+    },
+    syncUser(user) {
+      return inner.syncUser(user);
+    },
+    async getPreferences(userId) {
+      try {
+        return await inner.getPreferences(userId);
+      } catch {
+        return { ...fallback };
+      }
+    },
+    updatePreferences(userId, changes) {
+      return inner.updatePreferences(userId, changes);
+    },
+    archiveForComment(commentId) {
+      return inner.archiveForComment(commentId);
     },
   };
 }
@@ -389,6 +473,28 @@ export function defaultTransport(
 export function getNotificationTransport(): NotificationTransport {
   if (!cached) cached = defaultTransport();
   return cached;
+}
+
+let cachedRaw: NotificationTransport | undefined;
+
+/**
+ * The transport without the swallowing wrapper, for the one place that must
+ * see a failure: a preference save the Notifications card reverts on. Still a
+ * no-op without a secret key, so local work needs no vendor.
+ */
+export function getRawNotificationTransport(
+  env: Env = process.env,
+  log: Log = logToConsole
+): NotificationTransport {
+  if (cachedRaw) return cachedRaw;
+  const key = secretKey(env);
+  cachedRaw = key
+    ? knockTransport(
+        buildKnockClient(key),
+        env.KNOCK_FEED_CHANNEL_ID ?? ""
+      )
+    : noopTransport(log);
+  return cachedRaw;
 }
 
 // ─── Per-user signed token ───

@@ -13,6 +13,7 @@ import {
   type NotificationEvent,
   type SyncableUser,
 } from "./notification-transport.server";
+import { DEFAULT_PREFERENCES } from "./notification-types";
 
 const USER: SyncableUser = {
   id: 7,
@@ -242,8 +243,12 @@ describe("guardedTransport", () => {
           throw new Error("vendor down");
         },
         async syncUser() {},
+        async getPreferences() {
+          return { ...DEFAULT_PREFERENCES };
+        },
         async updatePreferences() {},
         async archiveForComment() {},
+
       },
       (message) => logs.push(message)
     );
@@ -261,7 +266,11 @@ describe("guardedTransport", () => {
         async syncUser() {
           throw new Error("vendor down");
         },
+        async getPreferences() {
+          return { ...DEFAULT_PREFERENCES };
+        },
         async updatePreferences() {},
+
         async archiveForComment() {},
       },
       (message) => logs.push(message)
